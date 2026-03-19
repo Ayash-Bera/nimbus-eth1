@@ -31,7 +31,7 @@ export EVMFork, Op, oph_defs, gas_meter
 # Helpers
 # ------------------------------------------------------------------------------
 
-template handleStopDirective(cpt: VmCpt, tracingEnabled: bool) =
+template handleStopDirective(cpt: VmCpt, tracingEnabled: bool, balTrackerEnabled: bool) =
   #trace "op: Stop"
   when tracingEnabled:
     if not cpt.code.atEnd():
@@ -41,7 +41,8 @@ template handleStopDirective(cpt: VmCpt, tracingEnabled: bool) =
       cpt.traceOpCodeEnded(Stop, cpt.opIndex)
 
 template handleFixedGasCostsDirective(
-    fork: EVMFork, op: Op, cost: GasInt, cpt: VmCpt, tracingEnabled: bool
+    fork: EVMFork, op: Op, cost: GasInt, cpt: VmCpt,
+    tracingEnabled: bool, balTrackerEnabled: bool
 ) =
   when tracingEnabled:
     cpt.opIndex = cpt.traceOpCodeStarted(op)
@@ -54,7 +55,10 @@ template handleFixedGasCostsDirective(
     if cpt.continuation.isNil:
       cpt.traceOpCodeEnded(op, cpt.opIndex)
 
-template handleOtherDirective(fork: EVMFork, op: Op, cpt: VmCpt, tracingEnabled: bool) =
+template handleOtherDirective(
+    fork: EVMFork, op: Op, cpt: VmCpt,
+    tracingEnabled: bool, balTrackerEnabled: bool
+) =
   when tracingEnabled:
     cpt.opIndex = cpt.traceOpCodeStarted(op)
 
@@ -65,7 +69,10 @@ template handleOtherDirective(fork: EVMFork, op: Op, cpt: VmCpt, tracingEnabled:
     if cpt.continuation.isNil:
       cpt.traceOpCodeEnded(op, cpt.opIndex)
 
-proc makeCaseDispatcher(forkArg: EVMFork, tracingEnabled: bool, opArg, cpt: NimNode): NimNode =
+proc makeCaseDispatcher(
+    forkArg: EVMFork, tracingEnabled: bool, balTrackerEnabled: bool,
+    opArg, cpt: NimNode
+): NimNode =
   # Create a case statement for dispatching opcode to handler for the given
   # fork, taking care to record the gas cost
   # TODO there are several forks for which neither opcodes nor gas costs
@@ -80,16 +87,16 @@ proc makeCaseDispatcher(forkArg: EVMFork, tracingEnabled: bool, opArg, cpt: NimN
       handler =
         if op == Stop:
           quote:
-            handleStopDirective(`cpt`, `tracingEnabled`)
+            handleStopDirective(`cpt`, `tracingEnabled`, `balTrackerEnabled`)
         elif gasCosts[op].kind == GckFixed:
           let cost = gasCosts[op].cost
           quote:
             handleFixedGasCostsDirective(
-              `forkArg`, `op`, `cost`, `cpt`, `tracingEnabled`
+              `forkArg`, `op`, `cost`, `cpt`, `tracingEnabled`, `balTrackerEnabled`
             )
         else:
           quote:
-            handleOtherDirective(`forkArg`, `op`, `cpt`, `tracingEnabled`)
+            handleOtherDirective(`forkArg`, `op`, `cpt`, `tracingEnabled`, `balTrackerEnabled`)
       branch =
         case op
         of Create, Create2, Call, CallCode, DelegateCall, StaticCall:
@@ -117,9 +124,10 @@ proc makeCaseDispatcher(forkArg: EVMFork, tracingEnabled: bool, opArg, cpt: NimN
 # ------------------------------------------------------------------------------
 
 macro dispatchInstr*(
-    fork: static EVMFork, tracingEnabled: static bool, op: Op, cpt: VmCpt
+    fork: static EVMFork, tracingEnabled: static bool,
+    balTrackerEnabled: static bool, op: Op, cpt: VmCpt
 ): untyped =
-  makeCaseDispatcher(fork, tracingEnabled, op, cpt)
+  makeCaseDispatcher(fork, tracingEnabled, balTrackerEnabled, op, cpt)
 
 # ------------------------------------------------------------------------------
 # Debugging ...
@@ -130,7 +138,7 @@ when isMainModule and isChatty:
 
   proc optimised(cpt: VmCpt): EvmResultVoid {.compileTime.} =
     while true:
-      dispatchInstr(FkFrontier, false, cpt.instr, cpt)
+      dispatchInstr(FkFrontier, false, false, cpt.instr, cpt)
 
 # ------------------------------------------------------------------------------
 # End

@@ -30,8 +30,9 @@ proc runVM(
     c: VmCpt,
     fork: static EVMFork,
     tracingEnabled: static bool,
+    balTrackerEnabled: static bool,
 ): EvmResultVoid =
-  ## VM instruction handler main loop - for each fork, a distinc version of
+  ## VM instruction handler main loop - for each fork, a distinct version of
   ## this function is instantiated so that selection of fork-specific
   ## versions of functions happens only once
 
@@ -42,16 +43,16 @@ proc runVM(
     {.computedGoto.}
     c.instr = c.code.next()
 
-    dispatchInstr(fork, tracingEnabled, c.instr, c)
+    dispatchInstr(fork, tracingEnabled, balTrackerEnabled, c.instr, c)
 
   ok()
 
-macro selectVM(v: VmCpt, fork: EVMFork, tracingEnabled: bool): EvmResultVoid =
-  # Generate opcode dispatcher that calls selectVM with a literal for each fork:
-  #
-  # case fork
-  # of A: runVM(v, A, ...)
-  # ...
+macro selectVM(
+    v: VmCpt, fork: EVMFork, tracingEnabled: bool, balTrackerEnabled: bool
+): EvmResultVoid =
+  # Generate opcode dispatcher that calls runVM with literal fork, tracing,
+  # and balTracker values for each combination, so each variant is fully
+  # specialised at compile time.
 
   let caseStmt = nnkCaseStmt.newTree(fork)
   for fork in EVMFork:
@@ -60,8 +61,14 @@ macro selectVM(v: VmCpt, fork: EVMFork, tracingEnabled: bool): EvmResultVoid =
         `fork`
       call = quote:
         case `tracingEnabled`
-        of false: runVM(`v`, `fork`, false)
-        of true: runVM(`v`, `fork`, true)
+        of false:
+          case `balTrackerEnabled`
+          of false: runVM(`v`, `fork`, false, false)
+          of true:  runVM(`v`, `fork`, false, true)
+        of true:
+          case `balTrackerEnabled`
+          of false: runVM(`v`, `fork`, true, false)
+          of true:  runVM(`v`, `fork`, true, true)
 
     caseStmt.add nnkOfBranch.newTree(forkVal, call)
   caseStmt
@@ -214,6 +221,7 @@ template handleEvmError(x: EvmErrorObj) =
 
 proc executeOpcodes*(c: Computation) =
   let fork = c.fork
+  let balTrackerEnabled = c.balTrackerEnabled
 
   block blockOne:
     let cont = c.continuation
@@ -243,7 +251,7 @@ proc executeOpcodes*(c: Computation) =
     if c.instr == Return or c.instr == Revert or c.instr == SelfDestruct:
       break blockOne
 
-    c.selectVM(fork, c.tracingEnabled).isOkOr:
+    c.selectVM(fork, c.tracingEnabled, balTrackerEnabled).isOkOr:
       handleEvmError(error)
       break blockOne # this break is not needed but make the flow clear
 
